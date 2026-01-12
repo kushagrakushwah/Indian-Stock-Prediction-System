@@ -30,7 +30,7 @@ class NewsArticle(Base):
     
     id = Column(Integer, primary_key=True, autoincrement=True)
     symbol = Column(String(20), index=True)
-    title = Column(String(255))
+    title = Column(Text)
     published_date = Column(DateTime)
     source = Column(String(100))
     url = Column(Text, unique=True) # Unique so we don't save the same news twice
