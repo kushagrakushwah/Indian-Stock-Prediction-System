@@ -1395,7 +1395,7 @@ files = [
 [package.dependencies]
 numpy = [
     {version = ">=2.1.0", markers = "python_version >= \"3.13\""},
-    {version = ">=1.26.0", markers = "python_version >= \"3.12\""},
+    {version = ">=1.26.0", markers = "python_version == \"3.12\""},
 ]
 
 [package.extras]
@@ -1987,7 +1987,7 @@ files = [
 [package.dependencies]
 typing-extensions = [
     {version = ">=4.12.0", markers = "python_version >= \"3.13\""},
-    {version = ">=4.6.0", markers = "python_version < \"3.13\""},
+    {version = ">=4.6.0"},
 ]
 
 [package.extras]
@@ -3681,6 +3681,21 @@ files = [
 nltk = {version = ">=3.1", markers = "python_version >= \"3\""}
 
 [[package]]
+name = "tf-keras"
+version = "2.20.1"
+description = "Deep learning for humans."
+optional = false
+python-versions = ">=3.9"
+groups = ["main"]
+files = [
+    {file = "tf_keras-2.20.1-py3-none-any.whl", hash = "sha256:3f0e0a34d9a4c8758f24fdc1053e6e335f16ab5534c7d34f1899b8924779760c"},
+    {file = "tf_keras-2.20.1.tar.gz", hash = "sha256:884be5938fb0b2b53b1583c1ae2b660ef87215377c29b5b6a77fd221b472aeaf"},
+]
+
+[package.dependencies]
+tensorflow = ">=2.20,<2.21"
+
+[[package]]
 name = "threadpoolctl"
 version = "3.6.0"
 description = "threadpoolctl"
@@ -4386,4 +4401,4 @@ repair = ["scipy (>=1.6.3)"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12, <3.15"
-content-hash = "5ddd50c7e61f8286a0d83aa28e83937a73517b8da879383848a2037de2872a82"
+content-hash = "2997a53066e9d2fb283d1c4aecfe7042b9c8ea4d3d1051c15a3624380fdf5853"

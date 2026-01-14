@@ -40,6 +40,7 @@ fastapi = "^0.104"
 uvicorn = "^0.24"
 streamlit = "^1.28"
 plotly = "^5.18"
+tf-keras = "^2.20.1"
 
 [build-system]
 requires = ["poetry-core"]
