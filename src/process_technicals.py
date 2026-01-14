@@ -1,20 +1,50 @@
 import pandas as pd
 import pandas_ta as ta
-from database import SessionLocal, StockPrice, NewsArticle, engine
-from sqlalchemy import func
+import yfinance as yf
+from database import engine
 
 def calculate_technicals():
-    print("📐 Step 1: Loading Data from Database...")
+    print("🌍 Step 1: Fetching Macro-Economic Data...")
     
-    # 1. Load Prices
-    # We use Pandas read_sql for speed
-    price_query = "SELECT * FROM stock_prices ORDER BY date ASC"
-    df_price = pd.read_sql(price_query, engine)
+    # 1. Fetch Global Indicators (Last 2 years)
+    # ^NSEI = Nifty 50
+    # INR=X = USD to INR Exchange Rate
+    # CL=F = Crude Oil Futures
+    # ^GSPC = S&P 500 (US Market)
+    tickers = ["^NSEI", "INR=X", "CL=F", "^GSPC"]
+    macro_data = yf.download(tickers, period="2y", interval="1d", progress=False)
+    
+    # Clean up MultiIndex columns from yfinance
+    if isinstance(macro_data.columns, pd.MultiIndex):
+        macro_data = macro_data['Close'] # Just take Close prices
+    
+    # Rename columns for clarity
+    macro_data.columns = ['crude_oil', 'usd_inr', 'sp500', 'nifty50']
+    
+    # 2. Calculate Macro Features (Returns & Trends)
+    # We want to know if Nifty is Going UP or DOWN
+    macro_features = pd.DataFrame(index=macro_data.index)
+    
+    # Nifty Context
+    macro_features['nifty_pct'] = macro_data['nifty50'].pct_change()
+    macro_features['nifty_rsi'] = ta.rsi(macro_data['nifty50'], length=14)
+    macro_features['nifty_trend'] = (macro_data['nifty50'] > macro_data['nifty50'].rolling(50).mean()).astype(int)
+    
+    # Macro Context
+    macro_features['usd_change'] = macro_data['usd_inr'].pct_change()
+    macro_features['oil_change'] = macro_data['crude_oil'].pct_change()
+    macro_features['sp500_change'] = macro_data['sp500'].pct_change()
+    
+    # Fill NaN (first few rows)
+    macro_features = macro_features.fillna(0)
+    
+    print("📐 Step 2: Loading Stock Data...")
+    query = "SELECT * FROM stock_prices ORDER BY date ASC"
+    df_price = pd.read_sql(query, engine)
     df_price['date'] = pd.to_datetime(df_price['date'])
     
-    # 2. Load Sentiment and Aggregate by Date and Symbol
-    # We need the AVERAGE score for each day per stock
-    print("🧠 Step 2: Aggregating Daily Sentiment...")
+    # 3. Load & Aggregate Sentiment
+    print("🧠 Step 3: Loading FinBERT Sentiment...")
     sent_query = """
         SELECT date(published_date) as date, symbol, AVG(sentiment_score) as daily_sentiment
         FROM news_articles
@@ -22,59 +52,40 @@ def calculate_technicals():
     """
     df_sent = pd.read_sql(sent_query, engine)
     df_sent['date'] = pd.to_datetime(df_sent['date'])
-
-    print("📊 Step 3: Calculating Technical Indicators...")
     
+    print("🔗 Step 4: Merging Everything...")
     processed_dfs = []
     
-    # Process each stock separately
     for symbol, group in df_price.groupby("symbol"):
-        group = group.set_index("date") 
+        group = group.set_index("date")
         
-        # --- TECHNICAL INDICATORS ---
-        
-        # RSI (Relative Strength Index) - Momentum
+        # Standard Technicals
         group['RSI'] = ta.rsi(group['close'], length=14)
-        
-        # SMA (Simple Moving Average) - Trend
         group['SMA_50'] = ta.sma(group['close'], length=50)
-        
-        # MACD (Moving Average Convergence Divergence)
-        macd = ta.macd(group['close'])
-        group = pd.concat([group, macd], axis=1)
-        
-        # Bollinger Bands - Volatility
-        bbands = ta.bbands(group['close'], length=20)
-        group = pd.concat([group, bbands], axis=1)
-        
-        # Returns (The target variable? No, we calculate Target later)
         group['pct_change'] = group['close'].pct_change()
+        group['rsi_slope'] = group['RSI'] - group['RSI'].shift(1)
         
-        # Reset index to merge
+        # Merge Macro Data (Left Join on Date)
+        group = group.join(macro_features, how='left')
+        
+        # Forward Fill Macro data (if stock traded but macro didn't, use yesterday's macro)
+        group[['nifty_pct', 'nifty_rsi', 'nifty_trend', 'usd_change', 'oil_change', 'sp500_change']] = \
+            group[['nifty_pct', 'nifty_rsi', 'nifty_trend', 'usd_change', 'oil_change', 'sp500_change']].ffill()
+            
         group = group.reset_index()
         processed_dfs.append(group)
-        print(f"   Processed {symbol}")
-
-    # Combine all stocks back into one big table
+        
     final_df = pd.concat(processed_dfs)
     
-    # 3. Merge Sentiment into Prices
-    print("🔗 Step 4: Merging Sentiment Data...")
-    
-    # Left Join: Keep all price rows, add sentiment where matches found
+    # Merge Sentiment
     final_df = pd.merge(final_df, df_sent, on=['date', 'symbol'], how='left')
-    
-    # Fill missing sentiment with 0.0 (Neutral)
     final_df['daily_sentiment'] = final_df['daily_sentiment'].fillna(0.0)
     
-    # 4. Clean Data
-    # Drops rows with NaN (the first 50 days of SMA calculation will be empty)
+    # Drop rows where Nifty data might be missing (very start)
     final_df = final_df.dropna()
     
-    # 5. Save
     final_df.to_csv("training_data.csv", index=False)
-    print(f"\n✅ Success! Saved {len(final_df)} rows to 'training_data.csv'")
-    print("   Ready for Machine Learning!")
+    print(f"✅ Success! Saved {len(final_df)} rows with MACRO & NIFTY data.")
 
 if __name__ == "__main__":
     calculate_technicals()

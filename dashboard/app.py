@@ -3,98 +3,155 @@ import pandas as pd
 import requests
 import plotly.graph_objects as go
 import numpy as np
-import joblib
 from tensorflow.keras.models import load_model
+import joblib
 
 # Config
 API_URL = "http://127.0.0.1:8000"
 st.set_page_config(page_title="Stock AI Pro", layout="wide")
 
-st.title("🚀 Indian Stock Prediction System")
+# Custom CSS to make it look like Google Finance
+st.markdown("""
+<style>
+    .metric-container {
+        background-color: #f0f2f6;
+        padding: 15px;
+        border-radius: 10px;
+        text-align: center;
+    }
+    .big-price {
+        font-size: 36px;
+        font-weight: bold;
+    }
+    .positive { color: green; }
+    .negative { color: red; }
+</style>
+""", unsafe_allow_html=True)
 
 # Sidebar
-stock = st.sidebar.selectbox("Select Stock", ["HEROMOTOCO", "COLPAL", "ITC", "BEL", "LT"])
+st.sidebar.title("🔍 Market Watch")
+# Default to HEROMOTOCO since we know it works
+stock = st.sidebar.text_input("Enter Symbol (e.g. HEROMOTOCO, ITC)", "HEROMOTOCO") 
+if st.sidebar.button("Analyze"):
+    st.session_state['selected_stock'] = stock
 
-# 1. Fetch Data from API
+selected_stock = st.session_state.get('selected_stock', 'HEROMOTOCO')
+
+# Main Header
+st.title(f"📈 {selected_stock.upper()} Analysis")
+
+# --- FETCH DATA ---
 try:
     # Get Logic Prediction
-    pred_res = requests.get(f"{API_URL}/predict/{stock}")
-    prediction = pred_res.json()
+    pred_res = requests.get(f"{API_URL}/predict/{selected_stock}")
     
-    # Get History for Charts
-    hist_res = requests.get(f"{API_URL}/history/{stock}")
+    if pred_res.status_code != 200:
+        st.error(f"Stock '{selected_stock}' not found. Try adding .NS for NSE stocks if needed.")
+        st.stop()
+        
+    data = pred_res.json()
+    stats = data['stats']
+    
+    # Get History
+    hist_res = requests.get(f"{API_URL}/history/{selected_stock}")
     hist_df = pd.DataFrame(hist_res.json())
     hist_df['date'] = pd.to_datetime(hist_df['date'])
-    hist_df = hist_df.sort_values('date')
-except:
-    st.error("❌ API not running. Run 'poetry run uvicorn src.main:app' in terminal.")
+
+except Exception as e:
+    st.error(f"Connection Error. Is the API running? {e}")
     st.stop()
 
-# --- TABS LAYOUT ---
-tab1, tab2, tab3 = st.tabs(["📈 Logical Trading", "🧠 Deep Learning Visuals", "🔮 Monte Carlo Forecast"])
+# --- TOP SECTION: GOOGLE FINANCE STYLE METRICS ---
+col1, col2, col3, col4 = st.columns([2, 1, 1, 2])
 
-# === TAB 1: THE LOGIC (Your Core Project) ===
+with col1:
+    # Big Price Display
+    # Note: We use 'current_price' here, which matches your new API
+    change = data['current_price'] - stats['prev_close']
+    pct = (change / stats['prev_close']) * 100
+    color = "green" if change >= 0 else "red"
+    
+    st.markdown(f"""
+        <div style='font-size: 40px; font-weight: bold;'>₹{data['current_price']:.2f}</div>
+        <div style='color: {color}; font-size: 20px;'>{change:+.2f} ({pct:+.2f}%)</div>
+    """, unsafe_allow_html=True)
+
+with col2:
+    st.metric("Open", f"₹{stats['open']}")
+    st.metric("High", f"₹{stats['high']}")
+
+with col3:
+    st.metric("Prev Close", f"₹{stats['prev_close']}")
+    st.metric("Low", f"₹{stats['low']}")
+
+with col4:
+    # The AI Decision Box
+    st.info(f"🤖 AI Recommendation: **{data['prediction']}**")
+    # Clean confidence string to float
+    conf_val = float(data['confidence'].replace('%', '')) / 100
+    st.progress(conf_val)
+    st.caption(f"Confidence: {data['confidence']}")
+
+st.divider()
+
+# --- TABS ---
+tab1, tab2, tab3 = st.tabs(["📊 Pro Charts", "🧠 Neural Forecast", "🎲 Future Sim"])
+
+# TAB 1: CANDLESTICK CHART (Like TradingView)
 with tab1:
-    col1, col2, col3 = st.columns(3)
-    col1.metric("AI Signal", prediction['prediction'])
-    col2.metric("Confidence", prediction['confidence'])
-    col3.metric("Latest Price", f"₹{prediction['latest_price']:.2f}")
+    st.subheader("Price Action")
+    
+    # 1. Candlestick Chart
+    fig = go.Figure(data=[go.Candlestick(x=hist_df['date'],
+                open=hist_df['open'],
+                high=hist_df['high'],
+                low=hist_df['low'],
+                close=hist_df['close'],
+                name='OHLC')])
 
-    st.subheader("Technical Analysis (Moving Averages)")
-    
-    # Calculate MAs for display
-    plot_df = hist_df.copy()
-    plot_df['MA50'] = plot_df['close'].rolling(50).mean()
-    plot_df['MA200'] = plot_df['close'].rolling(200).mean()
-    
-    # Plotly Chart
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=plot_df['date'], y=plot_df['close'], name='Close Price'))
-    fig.add_trace(go.Scatter(x=plot_df['date'], y=plot_df['MA50'], name='50 DMA', line=dict(color='orange')))
-    fig.add_trace(go.Scatter(x=plot_df['date'], y=plot_df['MA200'], name='200 DMA', line=dict(color='red')))
+    # 2. Add Moving Averages
+    hist_df['MA50'] = hist_df['close'].rolling(50).mean()
+    fig.add_trace(go.Scatter(x=hist_df['date'], y=hist_df['MA50'], line=dict(color='orange', width=1), name='50 MA'))
+
+    fig.update_layout(height=500, xaxis_rangeslider_visible=False, template="plotly_white")
     st.plotly_chart(fig, use_container_width=True)
 
-# === TAB 2: DEEP LEARNING (The "Show Off" Tab) ===
+# TAB 2: LSTM PREDICTION (Visual)
 with tab2:
-    st.subheader("LSTM Neural Network Trend")
-    
+    st.subheader("Deep Learning Trend Projection")
     try:
-        # Load the visual model directly (bypassing API for speed in demo)
+        # Load visual model
         viz_model = load_model("lstm_visual_model.h5")
         viz_scaler = joblib.load("visual_scaler.pkl")
         
-        # Prepare last 60 days
-        raw_data = hist_df['close'].values.reshape(-1, 1)
-        scaled = viz_scaler.transform(raw_data)
+        # Prepare data
+        raw = hist_df['close'].values.reshape(-1, 1)
+        scaled = viz_scaler.transform(raw)
         
-        # Predict next point (Demo logic)
+        # Predict next day
         last_60 = scaled[-60:].reshape(1, 60, 1)
         pred_scaled = viz_model.predict(last_60)
         pred_price = viz_scaler.inverse_transform(pred_scaled)[0][0]
         
-        st.metric("LSTM Predicted Next Price", f"₹{pred_price:.2f}")
+        st.metric("LSTM Predicted Next Close", f"₹{pred_price:.2f}")
         
-        # Show comparison chart (Real vs LSTM "Fit")
-        # (Simplified: Just showing the real trend vs a smoothed LSTM-like line)
-        st.line_chart(hist_df.set_index('date')['close'])
-        st.info("Note: LSTMs are used here for trend visualization. Trading signals come from the XGBoost Ensemble in Tab 1.")
+        # Plot Trend
+        chart_data = hist_df.set_index('date')[['close']]
+        st.line_chart(chart_data)
         
-    except Exception as e:
-        st.warning(f"Visual model not found. Run 'src/train_visual_model.py' to generate it. Error: {e}")
+    except:
+        st.warning("Visual model not ready. Run src/train_visual_model.py")
 
-# === TAB 3: FUTURE SIMULATION ===
+# TAB 3: MONTE CARLO
 with tab3:
-    st.subheader("Monte Carlo Simulation (30 Days)")
-    
-    # Calculate Volatility
+    st.subheader("30-Day Probability Cone")
     returns = hist_df['close'].pct_change()
     volatility = returns.std()
-    last_price = hist_df['close'].iloc[-1]
     
-    # Run 50 Simulations
     sim_data = pd.DataFrame()
+    last_price = data['current_price']
+    
     for i in range(50):
-        # Generate random future path
         daily_returns = np.random.normal(0, volatility, 30)
         price_path = [last_price]
         for r in daily_returns:
@@ -102,4 +159,3 @@ with tab3:
         sim_data[f"Sim {i}"] = price_path
         
     st.line_chart(sim_data)
-    st.caption("This chart simulates 50 possible futures based on past volatility.")

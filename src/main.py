@@ -23,7 +23,7 @@ def fetch_live_data(symbol: str):
     """
     Helper to get the last ~6 months of data from Yahoo Finance
     """
-    ticker = f"{symbol}.NS" # Assuming NSE stocks. Remove .NS for US stocks.
+    ticker = f"{symbol}.NS" # Assuming NSE stocks
     
     # Download data
     df = yf.download(ticker, period="6mo", interval="1d", progress=False)
@@ -31,15 +31,25 @@ def fetch_live_data(symbol: str):
     if df.empty:
         return None
     
-    # Flatten multi-index columns if they exist (yfinance update fix)
+    # 1. Handle MultiIndex (Fix for recent yfinance updates)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     
-    # Standardize column names
-    df.columns = [c.lower() for c in df.columns]
+    # 2. Reset Index (Date becomes a column here)
     df.reset_index(inplace=True)
-    df.rename(columns={'date': 'date', 'close': 'close', 'open': 'open', 'high': 'high', 'low': 'low', 'volume': 'volume'}, inplace=True)
     
+    # 3. Standardize Column Names (Lowercase EVERYTHING)
+    # This turns 'Date' -> 'date', 'Close' -> 'close', etc.
+    df.columns = [c.lower().strip() for c in df.columns]
+    
+    # Safety Check: Ensure 'date' column exists
+    if 'date' not in df.columns:
+        # Sometimes it's named 'index' or 'datetime'
+        if 'datetime' in df.columns:
+            df.rename(columns={'datetime': 'date'}, inplace=True)
+        elif 'index' in df.columns:
+            df.rename(columns={'index': 'date'}, inplace=True)
+            
     return df
 
 @app.get("/predict/{symbol}")
@@ -66,13 +76,14 @@ def predict_live(symbol: str):
     ema_10 = df['close'].ewm(span=10).mean().iloc[-1]
     dist_ema10 = latest['close'] / ema_10
     
-    # Sentiment (We don't have live news sentiment in this simple version, using neutral 0.0)
-    # Improvement: You could fetch live news here too, but it's slow.
+    # Sentiment (Using neutral 0.0 for live requests)
     live_sentiment = 0.0 
     sent_price_mix = live_sentiment * latest['pct_change']
     
     # 3. Prepare Feature Vector
-    features = [[
+    # We use a DataFrame to avoid the UserWarning
+    feature_names = ['RSI', 'rsi_slope', 'dist_ema10', 'daily_sentiment', 'pct_change', 'accel', 'sent_price_mix']
+    features_df = pd.DataFrame([[
         latest['RSI'],
         rsi_slope,
         dist_ema10,
@@ -80,16 +91,23 @@ def predict_live(symbol: str):
         latest['pct_change'],
         accel,
         sent_price_mix
-    ]]
+    ]], columns=feature_names)
     
     # 4. Predict
-    features_scaled = scaler.transform(features)
-    prediction = model.predict(features_scaled)[0]
+    features_scaled = scaler.transform(features_df)
     
+    # Ensemble Prediction
     try:
-        prob = model.predict_proba(features_scaled)[0][1]
-        confidence = prob if prediction == 1 else 1 - prob
-    except:
+        prediction = model.predict(features_scaled)[0]
+        # Try getting probability
+        if hasattr(model, "predict_proba"):
+            prob = model.predict_proba(features_scaled)[0][1]
+            confidence = prob if prediction == 1 else 1 - prob
+        else:
+            confidence = 0.0 # Fallback
+    except Exception as e:
+        print(f"Prediction Error: {e}")
+        prediction = 0
         confidence = 0.0
 
     direction = "BUY 🟢" if prediction == 1 else "SELL 🔴"
@@ -115,7 +133,12 @@ def get_history(symbol: str):
     if df is None:
         raise HTTPException(status_code=404, detail="Stock not found")
     
-    # Convert to list of dicts for JSON
-    # Date needs to be string
+    # Convert date to string for JSON compatibility
     df['date'] = df['date'].dt.strftime('%Y-%m-%d')
-    return df[['date', 'open', 'high', 'low', 'close', 'volume']].to_dict(orient='records')
+    
+    # Handle optional columns (Volume might be missing in some feeds)
+    cols = ['date', 'open', 'high', 'low', 'close']
+    if 'volume' in df.columns:
+        cols.append('volume')
+        
+    return df[cols].to_dict(orient='records')
